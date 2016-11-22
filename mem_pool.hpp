@@ -210,17 +210,21 @@ protected:
 		page_heap[y]->page_index = y;
 	}
 	void adjust_heap_from_top(uint32_t p) {
+
 		uint32_t l = p * 2;
-		if (page_heap.size()>l && *page_heap[l] > *page_heap[p]) {
-			swap_page(l, p);
-			adjust_heap_from_top(l);
-			return;
-		}
 		uint32_t r = l + 1;
-		if (page_heap.size()>r && *page_heap[r] > *page_heap[p]) {
-			swap_page(r, p);
-			adjust_heap_from_top(r);
-			return;
+
+		if (page_heap.size() > r && *page_heap[r] > *page_heap[l]) {
+			if (*page_heap[r] > *page_heap[p]) {
+				swap_page(r, p);
+				adjust_heap_for_pop(r);
+			}
+		}
+		else if (page_heap.size() > l) {
+			if (*page_heap[l] > *page_heap[p]) {
+				swap_page(l, p);
+				adjust_heap_for_pop(l);
+			}
 		}
 	}
 
@@ -244,7 +248,7 @@ protected:
 		}
 		else if (page_heap.size() > l) {
 			swap_page(l, p);
-			adjust_heap_for_pop(r);
+			adjust_heap_for_pop(l);
 		}
 	}
 
