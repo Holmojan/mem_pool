@@ -93,9 +93,10 @@ protected:
 				
 				uint32_t node = lock(l, cur_level - 1, level);
 				if (node!= BITMAP_NIL_NODE) {
-					if (!get_bit(bitmap__or, p))
+					if (!get_bit(bitmap__or, p)){
 						level_count[cur_level]--;
-					set_bit_1(bitmap__or, p);
+						set_bit_1(bitmap__or, p);
+					}
 					if (get_bit(bitmap_and, l) && get_bit(bitmap_and, r))
 						set_bit_1(bitmap_and, p);
 					return node;
@@ -127,8 +128,7 @@ protected:
 				uint32_t l = p * 2;
 				uint32_t r = l + 1;
 				if (!(get_bit(bitmap__or, l) || get_bit(bitmap__or, r))) {
-					if (get_bit(bitmap__or, p))
-						level_count[cur_level]++;
+					level_count[cur_level]++;
 					set_bit_0(bitmap__or, p);
 				}
 				set_bit_0(bitmap_and, p);
@@ -185,8 +185,12 @@ protected:
 	}
 
 	mem_unit* alloc_from_page(mem_page* ppage, uint8_t level) {
+		if(ppage->level_count[level]==0)
+			return nullptr;
+
 		uint32_t node = ppage->lock(1, max_level, level);
-		if (node == mem_page::BITMAP_NIL_NODE) return nullptr;
+		if (node == mem_page::BITMAP_NIL_NODE)
+			return nullptr;
 
 		uint32_t index = ppage->node_to_index(node, level);
 		mem_unit* punit = &ppage->units[index];
