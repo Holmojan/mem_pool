@@ -104,6 +104,8 @@ protected:
 				
 				/*uint32_t*/ node = lock(r, cur_level - 1, level);
 				if (node != BITMAP_NIL_NODE) {
+					//since left lock failed, bitmap__or p must equal 1
+					//so level_count[cur_level]-- is unnecessary
 					set_bit_1(bitmap__or, p);
 					if (get_bit(bitmap_and, l) && get_bit(bitmap_and, r))
 						set_bit_1(bitmap_and, p);
@@ -151,7 +153,6 @@ protected:
 		}
 	};
 protected:
-	//std::list<mem_page*> page_list;
 	//uint64_t total_alloc;
 	std::vector<mem_page*> page_heap;
 
@@ -221,13 +222,13 @@ protected:
 		if (page_heap.size() > r && *page_heap[r] > *page_heap[l]) {
 			if (*page_heap[r] > *page_heap[p]) {
 				swap_page(r, p);
-				adjust_heap_for_pop(r);
+				adjust_heap_from_top(r);
 			}
 		}
 		else if (page_heap.size() > l) {
 			if (*page_heap[l] > *page_heap[p]) {
 				swap_page(l, p);
-				adjust_heap_for_pop(l);
+				adjust_heap_from_top(l);
 			}
 		}
 	}
@@ -238,21 +239,6 @@ protected:
 		if (*page_heap[c] > *page_heap[p]) {
 			swap_page(c,p);
 			adjust_heap_from_bottom(p);
-		}
-	}
-
-	void adjust_heap_for_pop(uint32_t p) {
-
-		uint32_t l = p * 2;
-		uint32_t r = l + 1;
-
-		if (page_heap.size() > r && *page_heap[r] > *page_heap[l]) {
-			swap_page(r, p);
-			adjust_heap_for_pop(r);
-		}
-		else if (page_heap.size() > l) {
-			swap_page(l, p);
-			adjust_heap_for_pop(l);
 		}
 	}
 
@@ -364,9 +350,11 @@ public:
 	
 	void garbage_collection() {
 		while (page_heap.size() > 1 && page_heap[1]->empty()){
-			adjust_heap_for_pop(1);
+			swap_page(1, page_heap.size() - 1);
 			delete page_heap.back();
 			page_heap.pop_back();
+			if(page_heap.size() > 1)
+				adjust_heap_from_top(1);
 		}
 	}
 
