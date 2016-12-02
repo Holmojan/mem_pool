@@ -15,6 +15,12 @@
 #include <sstream>
 #include <algorithm>
 
+
+#if !defined(container_of)
+#	define container_of(p,s,m) ((s*)(((char*)p)-offsetof(s,m)))
+#endif
+
+
 template<uint8_t layer_count>
 class mem_pool_v3
 {
@@ -122,7 +128,7 @@ protected:
 		}
 
 		inline uint32_t get_segment_data_size() {
-			return sizeof(mem_segment)*(1 << layer) - offsetof(mem_segment, header.data);
+			return get_segment_size() - offsetof(mem_segment, header.data);
 		}
 
 		inline mem_page* segment_to_page(mem_segment* p_segment) {
@@ -137,8 +143,8 @@ protected:
 			uint32_t segment_size = get_segment_size();
 			uint32_t segment_count = MEM_PAGE_SIZE / segment_size;
 			assert(MEM_PAGE_SIZE % segment_size == 0);
-			for (uint32_t i = 0; i < segment_count; i++) {
-				mem_segment* p_segment = (mem_segment*)(p_page->data + i*segment_size);
+			for (uint32_t i = 0, j = 0; i < segment_count; i++, j += segment_size) {
+				mem_segment* p_segment = (mem_segment*)(p_page->data + j);
 				p_segment->layer = layer;
 				p_segment->used = 0;
 				p_segment->index = i;
@@ -151,8 +157,8 @@ protected:
 			uint32_t segment_size = get_segment_size();
 			uint32_t segment_count = MEM_PAGE_SIZE / segment_size;
 			assert(MEM_PAGE_SIZE % segment_size == 0);
-			for (uint32_t i = 0; i < segment_count; i++) {
-				mem_segment* p_segment = (mem_segment*)(p_page->data + i*segment_size);
+			for (uint32_t i = 0, j = 0; i < segment_count; i++, j += segment_size) {
+				mem_segment* p_segment = (mem_segment*)(p_page->data + j);
 				assert(p_segment->used == 0);
 				free_link.pop(&(p_segment->header.node));
 			}
@@ -163,7 +169,7 @@ protected:
 			free_link.pop_front();
 			/////////////////////////////////////////////////////////////////
 			uint32_t segment_size = get_segment_size();
-			mem_segment* p_segment = node_to_segment(p_node);
+			mem_segment* p_segment = container_of(p_node, mem_segment, header.node);
 			mem_page* p_page = segment_to_page(p_segment);
 			p_segment->used = 1;
 			p_page->alloc_count++;
@@ -172,7 +178,7 @@ protected:
 
 		void free_segment(void* p_data) {
 			uint32_t segment_size = get_segment_size();
-			mem_segment* p_segment = data_to_segment(p_data);
+			mem_segment* p_segment = container_of(p_data, mem_segment, header.data);
 			mem_page* p_page = segment_to_page(p_segment);
 			assert(p_segment->layer == layer);
 			assert(p_segment->used == 1);
@@ -191,13 +197,7 @@ protected:
 	inline uint32_t calc_segment_require_size(uint32_t size) {
 		return size + offsetof(mem_segment, header.data);
 	}
-	inline static mem_segment* data_to_segment(void* p_data) {
-		return (mem_segment*)((uint8_t*)p_data - offsetof(mem_segment, header.data));
-	}
-	inline static mem_segment* node_to_segment(dlink_node* p_node) {
-		return (mem_segment*)((uint8_t*)p_node - offsetof(mem_segment, header.node));
-	}
-
+	
 	void* alloc_direct(uint32_t size) {
 		uint32_t size2 = calc_segment_require_size(size);
 		mem_segment* p_segment = (mem_segment*)malloc(size2);
@@ -210,7 +210,7 @@ protected:
 		return p_segment->header.data;
 	}
 	void free_direct(void* ptr) {
-		mem_segment* p_segment = data_to_segment(ptr);
+		mem_segment* p_segment = container_of(ptr, mem_segment, header.data);
 		free(p_segment);
 	}
 	void* realloc_direct(void* ptr, uint32_t size) {
@@ -220,8 +220,33 @@ protected:
 		return p_segment2->header.data;
 	}
 
+	mem_page* alloc_page() {
+		if (free_page_link.empty())
+			return new mem_page;
+
+		dlink_node* p_node = free_page_link.begin();
+		free_page_link.pop_front();
+		mem_page* p_page = container_of(p_node, mem_page, node);
+		return p_page;
+	}
+
+	void free_page(mem_page* p_page) {
+		free_page_link.push_back(&(p_page->node));
+	}
+
+	void destroy_pages() {
+		while (!free_page_link.empty()) {
+			dlink_node* p_node = free_page_link.begin();
+			free_page_link.pop(p_node);
+
+			mem_page* p_page = container_of(p_node, mem_page, node);
+			delete p_page;
+		}
+	}
+
 	mem_layer*	layers[layer_count];
-	dlink		page_link;
+	dlink		using_page_link;
+	dlink		free_page_link;
 
 #if defined(MEM_POOL_DETECTED_MEM_LEAKS)
 	std::map<void*, std::tuple<uint32_t, const char*, uint32_t>> record;
@@ -234,7 +259,7 @@ public:
 		}
 	}
 	~mem_pool_v3() {
-		garbage_collection();
+		garbage_collection(true);
 
 #if defined(MEM_POOL_DETECTED_MEM_LEAKS)
 		{
@@ -253,8 +278,9 @@ public:
 #	endif
 		}
 #endif
+		assert(using_page_link.empty());
 		for (int32_t i = 0; i < layer_count; i++) {
-			assert(layers[i]->empty());
+			//assert(layers[i]->empty());
 			delete layers[i];
 		}
 	}
@@ -274,8 +300,11 @@ public:
 			return nullptr;
 
 		if ((*pp_layer)->empty()){
-			mem_page* p_page = new mem_page;
-			page_link.push_back(&(p_page->node));
+			mem_page* p_page = alloc_page();
+			if (p_page == nullptr)
+				return nullptr;
+
+			using_page_link.push_back(&(p_page->node));
 			(*pp_layer)->insert_page(p_page);
 		}
 
@@ -291,7 +320,7 @@ public:
 	}
 #endif
 	void free_memory(void* ptr) {
-		mem_segment* p_segment = data_to_segment(ptr);
+		mem_segment* p_segment = container_of(ptr, mem_segment, header.data);
 		uint8_t layer = p_segment->layer;
 
 		if (layer == MEM_DIRECT_LAYER) {
@@ -311,39 +340,42 @@ public:
 
 		mem_segment* p_segment = data_to_segment(ptr);
 		uint8_t layer = p_segment->layer;
-		if (layer == MEM_DIRECT_LAYER) {
+		if (layer == MEM_DIRECT_LAYER)
 			return realloc_direct(ptr, size);
-		}
 
 		uint32_t size2 = calc_segment_require_size(size);
 		if(layers[layer]->get_segment_size() >= size2)
 			return ptr;
 
 		void* ptr2 = alloc_memory(size);
-		if (ptr2 == nullptr) return nullptr;
+		if (ptr2 == nullptr)
+			return nullptr;
+
 		uint32_t len = layers[layer]->get_segment_data_size()
 		memcpy(ptr2, ptr, len);
 		free_memory(ptr);
 		return ptr2;
 	}
 
-	void garbage_collection() {
-		for (dlink_node* p_node = page_link.begin(); p_node != page_link.end();) {
-			mem_page* p_page = (mem_page*)((uint8_t*)p_node - offsetof(mem_page, node));
+	void garbage_collection(bool completely = false) {
+		for (dlink_node* p_node = using_page_link.begin(); p_node != using_page_link.end();) {
+			mem_page* p_page = container_of(p_node, mem_page, node);
 			dlink_node* p_next = p_node->p_next;
-
 			if (p_page->alloc_count == 0) {
-				page_link.pop(p_node);
+				using_page_link.pop(p_node);
 				uint8_t layer = p_page->layer;
 				layers[layer]->remove_page(p_page);
-				delete p_page;
+				free_page(p_page);
 			}
 			p_node = p_next;
+		}
+		if (completely) {
+			destroy_pages();
 		}
 	}
 
 	inline uint32_t get_page_count() {
-		return page_link.size();
+		return using_page_link.size();
 	}
 	inline uint32_t get_page_size() {
 		return MEM_PAGE_SIZE;
