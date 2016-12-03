@@ -97,7 +97,8 @@ protected:
 
 	enum {
 		MEM_DIRECT_LAYER = 31,
-		MEM_PAGE_SIZE = (1 << layer_count)*sizeof(mem_segment),
+		MEM_BASE_SIZE = sizeof(mem_segment),
+		MEM_PAGE_SIZE = MEM_BASE_SIZE << layer_count,
 		MEM_MAX_LAYER = layer_count - 1,
 		MEM_MAX_SEGMENT_INDEX = (1 << layer_count) - 1
 	};
@@ -124,7 +125,7 @@ protected:
 		}
 
 		inline uint32_t get_segment_size() {
-			return sizeof(mem_segment)*(1 << layer);
+			return MEM_BASE_SIZE << layer;
 		}
 
 		inline uint32_t get_segment_data_size() {
@@ -132,9 +133,8 @@ protected:
 		}
 
 		inline mem_page* segment_to_page(mem_segment* p_segment) {
-			return (mem_page*)((uint8_t*)p_segment
-				- p_segment->index*get_segment_size()
-				- offsetof(mem_page, data));
+			uint8_t* p_data = (uint8_t*)p_segment - get_segment_size()*p_segment->index;
+			return container_of(p_data, mem_page, data);
 		}
 
 		void insert_page(mem_page* p_page) {
@@ -214,7 +214,7 @@ protected:
 		free(p_segment);
 	}
 	void* realloc_direct(void* ptr, uint32_t size) {
-		mem_segment* p_segment = data_to_segment(ptr);
+		mem_segment* p_segment = container_of(ptr, mem_segment, header.data);
 		uint32_t size2 = calc_segment_require_size(size);
 		mem_segment* p_segment2 = (mem_segment*)realloc(p_segment, size2);
 		return p_segment2->header.data;
@@ -338,7 +338,7 @@ public:
 		if (ptr == nullptr)
 			return alloc_memory(size);
 
-		mem_segment* p_segment = data_to_segment(ptr);
+		mem_segment* p_segment = container_of(ptr, mem_segment, header.data);
 		uint8_t layer = p_segment->layer;
 		if (layer == MEM_DIRECT_LAYER)
 			return realloc_direct(ptr, size);
@@ -351,7 +351,7 @@ public:
 		if (ptr2 == nullptr)
 			return nullptr;
 
-		uint32_t len = layers[layer]->get_segment_data_size()
+		uint32_t len = layers[layer]->get_segment_data_size();
 		memcpy(ptr2, ptr, len);
 		free_memory(ptr);
 		return ptr2;
